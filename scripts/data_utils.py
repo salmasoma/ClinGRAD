@@ -5,24 +5,25 @@ from torch_geometric.data import HeteroData
 from sklearn.preprocessing import StandardScaler
 
 def create_hetero_data(patient_df, modalities, gene_data=None, radiomics_data=None, 
-                       structure_file='../data/structure_distance_clean.csv',
-                       co_expression_file='../data/co_expression.csv',
-                       dwi_matrix_file='../data/DWI_Matrix.csv',
-                       struct=True, coexp=True, device='cpu'):
+                       structure_file='data/structure_distance_clean.csv',
+                       co_expression_file='data/co_expression.csv',
+                       dwi_matrix_file='data/DWI_Matrix.csv',
+                       struct=True, coexp=True, device='cpu', binary=True):
     """
     Create a heterogeneous graph data object from patient data.
     
     Args:
         patient_df: Pandas DataFrame containing patient information
         modalities: List of modalities to use (G for gene, R for radiomics)
-        gene_data: Path to gene data CSV file (required if 'G' in modalities)
-        radiomics_data: Path to radiomics data CSV file (required if 'R' in modalities)
+        gene_data: Path to gene data CSV file or DataFrame (required if 'G' in modalities)
+        radiomics_data: Path to radiomics data CSV file or DataFrame (required if 'R' in modalities)
         structure_file: Path to structure distance file
         co_expression_file: Path to co-expression file
         dwi_matrix_file: Path to DWI matrix file
         struct: Whether to include structure-structure connections
         coexp: Whether to include gene co-expression connections
         device: Device to put the data on
+        binary: Whether to use binary classification (AD vs CTL) or multiclass
         
     Returns:
         HeteroData object for model training/inference
@@ -46,7 +47,12 @@ def create_hetero_data(patient_df, modalities, gene_data=None, radiomics_data=No
     # Step 1: Add patient nodes
     patient_df['APOE_encoded'] = patient_df['APOE'].apply(lambda x: 1 if x == 'E3E3' else 2 if x == 'E3E4' else 3 if x == 'E4E4' else 4 if x == 'E2E3' else 0)
     patient_df['Sex'] = patient_df['Sex'].apply(lambda x: 1 if x == 'Male' else 0)
-    hetero_data['patient'].x = torch.tensor(patient_df[['APOE_encoded', 'Sex', 'Global_Deterioration_Scale', 'MMSE']].values, dtype=torch.float)
+    hetero_data['patient'].x = torch.tensor(patient_df[['APOE_encoded', 'Sex', 'MMSE']].values, dtype=torch.float)
+    
+    if binary:
+        hetero_data['patient'].y = torch.tensor(patient_df['Subtype'].apply(lambda x: 0 if x == 'CTL' else 1).values, dtype=torch.long)
+    else:
+        hetero_data['patient'].y = torch.tensor(patient_df['Subtype'].apply(lambda x: 0 if x == 'CTL' else 1 if x == 'MCI' else 2 if x == 'AD' else 3).values, dtype=torch.long)
     
     # Step 2: Add gene nodes and patient-gene edges if applicable
     if 'G' in modalities:
@@ -59,7 +65,6 @@ def create_hetero_data(patient_df, modalities, gene_data=None, radiomics_data=No
             gene_df = gene_data
             
         gene_df = gene_df[gene_df['Key'].isin(patient_df['Key'])]
-        gene_features = gene_df.drop(columns=['Key']).values
         
         num_patients = len(patient_df)
         num_genes = gene_df.shape[1] - 1
@@ -67,7 +72,7 @@ def create_hetero_data(patient_df, modalities, gene_data=None, radiomics_data=No
         hetero_data['gene'].x = torch.tensor(gene_expression_values, dtype=torch.float).unsqueeze(1)
 
         patient_indices = torch.arange(num_patients).repeat_interleave(num_genes)
-        gene_indices = torch.arange(num_genes).repeat(num_patients) + torch.arange(num_patients).repeat_interleave(num_genes) * num_genes
+        gene_indices = torch.arange(num_genes).repeat(num_patients)
         patient_gene_edges = torch.stack([patient_indices, gene_indices], dim=0)
         hetero_data['patient', 'associated_with', 'gene'].edge_index = patient_gene_edges
 
@@ -120,7 +125,8 @@ def create_hetero_data(patient_df, modalities, gene_data=None, radiomics_data=No
             swi_matrix = pd.read_csv(dwi_matrix_file, header=None).values
             
             # Filter distance data for relevant patients
-            structure_dist_df = structure_dist_df[structure_dist_df['structure_1'].str.contains('|'.join(patient_df['Key'].unique()))]
+            patient_ids = set(patient_df['Key'].unique())
+            structure_dist_df = structure_dist_df[structure_dist_df['structure_1'].apply(lambda x: x.split('_')[0] in patient_ids)]
             
             # Create a mapping of unique structure names to indices
             unique_structures = pd.concat([
@@ -151,9 +157,9 @@ def create_hetero_data(patient_df, modalities, gene_data=None, radiomics_data=No
             scaled_swi = 1 / (1 + np.exp(scaled_swi))  # Sigmoid transformation to [0,1]
             
             # Combine the two sources of edge weights
-            α = 0.5  # weight for distance-based edges
-            β = 0.5  # weight for SWI connectivity-based edges
-            combined_weights = α * scaled_distances + β * scaled_swi
+            a = 0.5  # weight for distance-based edges
+            b = 0.5  # weight for SWI connectivity-based edges
+            combined_weights = a * scaled_distances + b * scaled_swi
             
             # Create edge index and attributes
             structure_1_edges = structure_dist_df['structure_1'].map(structure_map).values

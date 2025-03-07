@@ -1,8 +1,9 @@
 import torch
 from torch_geometric.nn import HeteroConv, GATConv, Linear
+import torch.nn.functional as F
 
 class ClinGRAD(torch.nn.Module):
-    def __init__(self, hidden_channels, out_channels, metadata, modalities, struct=True, coexp=True, heads=4):
+    def __init__(self, hidden_channels, out_channels, metadata, modalities, struct=True, coexp=True, heads=4, num_radiomics_features=107):
         """
         Initialize ClinGRAD model
         
@@ -14,16 +15,20 @@ class ClinGRAD(torch.nn.Module):
             struct (bool): Whether to include structure-structure connections
             coexp (bool): Whether to include gene coexpression connections
             heads (int): Number of attention heads
+            num_radiomics_features (int): Number of radiomics features
         """
         super().__init__()
-        self.patient_lin = Linear(4, hidden_channels)
-        self.gene_lin = Linear(1, hidden_channels)
-        self.structure_lin = Linear(107, hidden_channels)
         self.modalities = modalities
         self.struct = struct
         self.coexp = coexp
         self.heads = heads
         
+        # Initial feature transformations
+        self.patient_lin = Linear(3, hidden_channels)
+        self.gene_lin = Linear(1, hidden_channels)
+        self.structure_lin = Linear(num_radiomics_features, hidden_channels)
+        
+        # Modified GAT layers for different modality combinations
         if 'G' in modalities and 'R' in modalities:
             if coexp:
                 if struct:
@@ -37,12 +42,12 @@ class ClinGRAD(torch.nn.Module):
                     })
                     
                     self.conv2 = HeteroConv({
-                        ('patient', 'associated_with', 'gene'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('gene', 'rev_associated_with', 'patient'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('gene', 'co_expressed_with', 'gene'): GATConv(hidden_channels * heads, hidden_channels, heads=heads, edge_dim=1, add_self_loops=False),
-                        ('patient', 'interacts', 'structure'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('structure', 'rev_interacts', 'patient'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('structure', 'related_to', 'structure'): GATConv(hidden_channels * heads, hidden_channels, heads=heads, edge_dim=1, add_self_loops=False),
+                        ('patient', 'associated_with', 'gene'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('gene', 'rev_associated_with', 'patient'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('gene', 'co_expressed_with', 'gene'): GATConv(hidden_channels * heads, hidden_channels, heads=1, edge_dim=1, add_self_loops=False),
+                        ('patient', 'interacts', 'structure'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('structure', 'rev_interacts', 'patient'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('structure', 'related_to', 'structure'): GATConv(hidden_channels * heads, hidden_channels, heads=1, edge_dim=1, add_self_loops=False),
                     })
                 else:
                     self.conv1 = HeteroConv({
@@ -54,11 +59,11 @@ class ClinGRAD(torch.nn.Module):
                     })
                     
                     self.conv2 = HeteroConv({
-                        ('patient', 'associated_with', 'gene'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('gene', 'rev_associated_with', 'patient'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('gene', 'co_expressed_with', 'gene'): GATConv(hidden_channels * heads, hidden_channels, heads=heads, edge_dim=1, add_self_loops=False),
-                        ('patient', 'interacts', 'structure'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('structure', 'rev_interacts', 'patient'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
+                        ('patient', 'associated_with', 'gene'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('gene', 'rev_associated_with', 'patient'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('gene', 'co_expressed_with', 'gene'): GATConv(hidden_channels * heads, hidden_channels, heads=1, edge_dim=1, add_self_loops=False),
+                        ('patient', 'interacts', 'structure'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('structure', 'rev_interacts', 'patient'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
                     })
             else:
                 if struct:
@@ -71,11 +76,11 @@ class ClinGRAD(torch.nn.Module):
                     })
                     
                     self.conv2 = HeteroConv({
-                        ('patient', 'associated_with', 'gene'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('gene', 'rev_associated_with', 'patient'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('patient', 'interacts', 'structure'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('structure', 'rev_interacts', 'patient'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                        ('structure', 'related_to', 'structure'): GATConv(hidden_channels * heads, hidden_channels, heads=heads, edge_dim=1, add_self_loops=False),
+                        ('patient', 'associated_with', 'gene'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('gene', 'rev_associated_with', 'patient'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('patient', 'interacts', 'structure'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('structure', 'rev_interacts', 'patient'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                        ('structure', 'related_to', 'structure'): GATConv(hidden_channels * heads, hidden_channels, heads=1, edge_dim=1, add_self_loops=False),
                     })
 
         elif 'G' in modalities:
@@ -87,9 +92,9 @@ class ClinGRAD(torch.nn.Module):
                 })
                     
                 self.conv2 = HeteroConv({
-                    ('patient', 'associated_with', 'gene'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                    ('gene', 'rev_associated_with', 'patient'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                    ('gene', 'co_expressed_with', 'gene'): GATConv(hidden_channels * heads, hidden_channels, heads=heads, edge_dim=1, add_self_loops=False),
+                    ('patient', 'associated_with', 'gene'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                    ('gene', 'rev_associated_with', 'patient'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                    ('gene', 'co_expressed_with', 'gene'): GATConv(hidden_channels * heads, hidden_channels, heads=1, edge_dim=1, add_self_loops=False),
                 })
             else:
                 self.conv1 = HeteroConv({
@@ -98,8 +103,8 @@ class ClinGRAD(torch.nn.Module):
                 })
                     
                 self.conv2 = HeteroConv({
-                    ('patient', 'associated_with', 'gene'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                    ('gene', 'rev_associated_with', 'patient'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
+                    ('patient', 'associated_with', 'gene'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                    ('gene', 'rev_associated_with', 'patient'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
                 })
 
         elif 'R' in modalities:
@@ -111,9 +116,9 @@ class ClinGRAD(torch.nn.Module):
                 })
                     
                 self.conv2 = HeteroConv({
-                    ('patient', 'interacts', 'structure'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                    ('structure', 'rev_interacts', 'patient'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                    ('structure', 'related_to', 'structure'): GATConv(hidden_channels * heads, hidden_channels, heads=heads, edge_dim=1, add_self_loops=False),
+                    ('patient', 'interacts', 'structure'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                    ('structure', 'rev_interacts', 'patient'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                    ('structure', 'related_to', 'structure'): GATConv(hidden_channels * heads, hidden_channels, heads=1, edge_dim=1, add_self_loops=False),
                 })
             else:
                 self.conv1 = HeteroConv({
@@ -122,12 +127,12 @@ class ClinGRAD(torch.nn.Module):
                 })
                     
                 self.conv2 = HeteroConv({
-                    ('patient', 'interacts', 'structure'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
-                    ('structure', 'rev_interacts', 'patient'): GATConv((hidden_channels * heads, hidden_channels), hidden_channels, heads=heads, add_self_loops=False),
+                    ('patient', 'interacts', 'structure'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
+                    ('structure', 'rev_interacts', 'patient'): GATConv((hidden_channels * heads, hidden_channels * heads), hidden_channels, heads=1, add_self_loops=False),
                 })
 
-        # Final linear layer for output classification
-        self.lin = Linear(hidden_channels * heads, out_channels)
+        # Final linear layer
+        self.lin = Linear(hidden_channels, out_channels)
 
     def forward(self, x_dict, edge_index_dict):
         """
@@ -140,37 +145,27 @@ class ClinGRAD(torch.nn.Module):
         Returns:
             Tensor: Output predictions for patient nodes
         """
-        # Initial node feature transformations
-        if 'G' in self.modalities and 'R' in self.modalities:
-            x_dict = {
-                'patient': self.patient_lin(x_dict['patient']),
-                'gene': self.gene_lin(x_dict['gene'].float()),
-                'structure': self.structure_lin(x_dict['structure']),
-            }
-            edge_index_dict[('structure', 'rev_interacts', 'patient')] = edge_index_dict[('patient', 'interacts', 'structure')].flip(0)
+        # Initial node feature transformations based on modalities
+        x_dict_transformed = {}
+        
+        if 'patient' in x_dict:
+            x_dict_transformed['patient'] = self.patient_lin(x_dict['patient'])
+            
+        if 'G' in self.modalities and 'gene' in x_dict:
+            x_dict_transformed['gene'] = self.gene_lin(x_dict['gene'])
             edge_index_dict[('gene', 'rev_associated_with', 'patient')] = edge_index_dict[('patient', 'associated_with', 'gene')].flip(0)
-
-        elif 'G' in self.modalities:
-            x_dict = {
-                'patient': self.patient_lin(x_dict['patient']),
-                'gene': self.gene_lin(x_dict['gene'].float()),
-            }
-            edge_index_dict[('gene', 'rev_associated_with', 'patient')] = edge_index_dict[('patient', 'associated_with', 'gene')].flip(0)
-
-        elif 'R' in self.modalities:
-            x_dict = {
-                'patient': self.patient_lin(x_dict['patient']),
-                'structure': self.structure_lin(x_dict['structure']),
-            }
+            
+        if 'R' in self.modalities and 'structure' in x_dict:
+            x_dict_transformed['structure'] = self.structure_lin(x_dict['structure'])
             edge_index_dict[('structure', 'rev_interacts', 'patient')] = edge_index_dict[('patient', 'interacts', 'structure')].flip(0)
 
-        # Apply the first GAT layer
-        x_dict = self.conv1(x_dict, edge_index_dict)
-        x_dict = {key: x.relu() for key, x in x_dict.items()}
+        # First GAT layer with attention
+        x_dict = self.conv1(x_dict_transformed, edge_index_dict)
+        x_dict = {key: F.relu(x) for key, x in x_dict.items()}
 
-        # Apply the second GAT layer
+        # Second GAT layer with attention
         x_dict = self.conv2(x_dict, edge_index_dict)
-        x_dict = {key: x.relu() for key, x in x_dict.items()}
+        x_dict = {key: F.relu(x) for key, x in x_dict.items()}
 
-        # Return the output for patient node classification
+        # Final classification
         return self.lin(x_dict['patient'])

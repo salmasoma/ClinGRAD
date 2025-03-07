@@ -10,7 +10,7 @@ from data_utils import create_hetero_data
 
 def parse_args():
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description='ClinGRAD Inference')
+    parser = argparse.ArgumentParser(description='ClinGRAD Inference with Model Compatibility')
     parser.add_argument('--model_path', type=str, required=True, help='Path to the saved model')
     parser.add_argument('--patient_data', type=str, required=True, help='Path to patient data CSV')
     parser.add_argument('--gene_data', type=str, help='Path to gene data CSV (optional if not using G modality)')
@@ -23,16 +23,19 @@ def parse_args():
                         help='Path to DWI connectivity matrix file')
     parser.add_argument('--output_path', type=str, default='predictions.csv', help='Path to save predictions')
     parser.add_argument('--modality', type=str, default='RG', help='Modalities to use (R=radiomics, G=gene)')
-    parser.add_argument('--struct', action='store_true', default=True, help='Include structure-structure connections')
+    parser.add_argument('--struct', action='store_true', default=True, help='Include struct to struct connections')
+    parser.add_argument('--no-struct', dest='struct', action='store_false', help='Exclude struct to struct connections')
     parser.add_argument('--coexp', action='store_true', default=True, help='Include gene coexpression connections')
-    parser.add_argument('--binary', action='store_true', default=True, help='Binary or multiclass classification')
-    parser.add_argument('--heads', type=int, default=4, help='Number of attention heads')
+    parser.add_argument('--no-coexp', dest='coexp', action='store_false', help='Exclude gene coexpression connections')
+    parser.add_argument('--binary', action='store_true', default=True, help='Binary classification')
+    parser.add_argument('--multiclass', dest='binary', action='store_false', help='Multiclass classification')
+    parser.add_argument('--heads', type=int, default=8, help='Number of attention heads')
     
     return parser.parse_args()
 
 def run_inference(args):
     """
-    Run inference using a pre-trained ClinGRAD model
+    Run inference using a pre-trained ClinGRAD model with compatibility handling
     
     Args:
         args: Command line arguments
@@ -41,12 +44,13 @@ def run_inference(args):
         DataFrame with predictions
     """
     # Device setup
-    device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     # Split modalities
     modalities = list(args.modality)
     print(f"Using modalities: {modalities}")
+    print(f"Using {args.heads} attention heads for compatibility with saved model")
     
     # Constants
     NUM_CLASSES = 2 if args.binary else 4
@@ -54,6 +58,14 @@ def run_inference(args):
     # Load patient data
     print("Loading patient data...")
     patient_df = pd.read_csv(args.patient_data)
+    
+    # Determine radiomics feature count dynamically if radiomics data is provided
+    num_radiomics_features = 107  # Default value
+    if 'R' in modalities and args.radiomics_data:
+        sample = pd.read_csv(args.radiomics_data)
+        radiomics_features = [col for col in sample.columns if 'original_' in col]
+        num_radiomics_features = len(radiomics_features)
+        print(f"Detected {num_radiomics_features} radiomics features")
     
     # Create hetero data
     print("Creating heterogeneous graph data...")
@@ -67,7 +79,8 @@ def run_inference(args):
         dwi_matrix_file=args.dwi_matrix_file,
         struct=args.struct,
         coexp=args.coexp,
-        device=device
+        device=device,
+        binary=args.binary
     )
     
     # Create data loader
@@ -82,9 +95,18 @@ def run_inference(args):
         modalities=modalities,
         struct=args.struct,
         coexp=args.coexp,
-        heads=args.heads
+        heads=args.heads,
+        num_radiomics_features=num_radiomics_features
     )
-    model.load_state_dict(torch.load(args.model_path, map_location=device))
+    
+    try:
+        model.load_state_dict(torch.load(args.model_path, map_location=device))
+        print("Model loaded successfully!")
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        print("This might be due to architecture differences. Try using --heads 8 if not already using that.")
+        return None
+    
     model = model.to(device)
     model.eval()
     
@@ -124,6 +146,10 @@ def run_inference(args):
     for i in range(NUM_CLASSES):
         class_label = class_mapping[i]
         results[f'Probability_{class_label}'] = all_probabilities[:, i]
+    
+    # Make sure the output directory exists
+    import os
+    os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
     
     # Save results
     results.to_csv(args.output_path, index=False)
