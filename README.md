@@ -80,7 +80,7 @@ python inference.py \
 * `--struct` / `--no-struct`: Include/exclude structure-to-structure connections
 * `--coexp` / `--no-coexp`: Include/exclude gene co-expression connections
 * `--binary` / `--multiclass`: Use binary or multiclass classification
-* `--heads`: Number of attention heads (default: 4)
+* `--heads`: Number of attention heads (default: 8)
 
 ## 📊 Performance
 
