@@ -25,7 +25,7 @@ conda create -n clingrad python=3.9
 # Activate Environment
 conda activate clingrad
 # Clone Repo
-git clone https://github.com/YourUsername/ClinGRAD/
+git clone https://github.com/salmasoma/ClinGRAD/
 cd ClinGRAD
 # Install requirements
 pip install -r requirements.txt
